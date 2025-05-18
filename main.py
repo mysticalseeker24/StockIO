@@ -443,8 +443,7 @@ def main():
         print(f"{'Stock':<20} {'Total Return':<15} {'Sharpe Ratio':<15} {'Max Drawdown':<15}")
         print("-" * 65)
         for stock_name, metrics in results.items():
-            print(f"{stock_name:<20} {metrics['total_return']:.2%:<15} "
-                  f"{metrics['sharpe_ratio']:.2f:<15} {metrics['max_drawdown']:.2%:<15}")
+            print(f"{stock_name:<20} {metrics['total_return']:.2%:<15} {metrics['sharpe_ratio']:.2f:<15} {metrics['max_drawdown']:.2%:<15}")
     
     # Run Streamlit app if available
     print("\nWould you like to start the web interface (Streamlit app)? (y/n)")
