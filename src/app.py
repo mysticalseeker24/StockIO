@@ -5,7 +5,6 @@ import joblib
 import matplotlib.pyplot as plt
 import os
 import sys
-import talib
 
 # Add the parent directory to the path so we can import the local modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,17 +47,31 @@ def process_uploaded_data(df):
     # Calculate returns
     df['returns'] = (df['Close'] - df['Close'].shift(1)) / df['Close'].shift(1)
     
-    # Calculate technical indicators
-    df['SMA50'] = talib.SMA(df['Close'].values, timeperiod=50)
-    df['SMA200'] = talib.SMA(df['Close'].values, timeperiod=200)
+    # Calculate SMA indicators using pandas rolling mean
+    df['SMA50'] = df['Close'].rolling(window=50).mean()
+    df['SMA200'] = df['Close'].rolling(window=200).mean()
     df['trend_strength'] = (df['SMA50'] - df['SMA200']) / df['SMA200']
-    df['RSI'] = talib.RSI(df['Close'].values, timeperiod=14)
+    
+    # Calculate RSI using pandas (14-day period)
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.rolling(window=14).mean()
+    avg_loss = loss.rolling(window=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # Calculate volatility
     df['volatility'] = df['returns'].rolling(window=20).std()
+    
+    # Calculate momentum
     df['momentum'] = df['returns'].rolling(window=10).sum()
     
     # Calculate Bollinger Bands
-    df['BB_upper'], df['BB_middle'], df['BB_lower'] = talib.BBANDS(
-        df['Close'].values, timeperiod=20, nbdevup=2, nbdevdn=2)
+    df['BB_middle'] = df['Close'].rolling(window=20).mean()
+    std = df['Close'].rolling(window=20).std()
+    df['BB_upper'] = df['BB_middle'] + (std * 2)
+    df['BB_lower'] = df['BB_middle'] - (std * 2)
     
     # Drop NaN values
     df.dropna(inplace=True)
@@ -102,9 +115,13 @@ def main():
                 # Generate signals
                 signals_df = generate_signals(processed_df, model_path, scaler_path)
                 
-                # Simulate trades
+                # Simulation parameters
                 initial_capital = st.sidebar.number_input("Initial Capital ($)", value=100000, step=10000)
-                trades_df, metrics = simulate_trades(signals_df, initial_capital)
+                risk_per_trade = st.sidebar.slider("Risk Per Trade (%)", min_value=0.1, max_value=5.0, value=1.0, step=0.1) / 100
+                stop_loss_pct = st.sidebar.slider("Stop Loss (%)", min_value=0.5, max_value=10.0, value=2.0, step=0.5) / 100
+                
+                # Simulate trades with selected parameters
+                trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct)
                 
                 # Create tabs for different views
                 tab1, tab2, tab3 = st.tabs(["Performance Metrics", "Portfolio Value", "Trading Signals"])
@@ -155,8 +172,8 @@ def main():
                     # Display signals table
                     st.header("Trading Signals and Positions")
                     signals_table = trades_df[['Open', 'High', 'Low', 'Close', 'TF_signal', 
-                                             'MR_signal', 'ML_signal', 'final_signal', 
-                                             'position', 'portfolio_value']].copy()
+                                              'MR_signal', 'ML_signal', 'final_signal', 
+                                              'position', 'portfolio_value', 'stop_loss']].copy()
                     
                     # Add color coding based on signal
                     st.dataframe(signals_table.style.applymap(
