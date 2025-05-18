@@ -331,6 +331,75 @@ def evaluate_strategy(stock_data, model_path='../models/random_forest_model.jobl
     
     return trades_df, metrics
 
+def optimize_strategy_parameters(df, model_path='../models/random_forest_model.joblib', 
+                           scaler_path='../models/scaler.joblib', initial_capital=100000):
+    """
+    Optimize strategy parameters to maximize Sharpe Ratio, targeting values above 1.5.
+    
+    Args:
+        df (DataFrame): Processed stock data with technical indicators
+        model_path (str): Path to the trained model
+        scaler_path (str): Path to the fitted scaler
+        initial_capital (float): Initial capital for trading simulation
+        
+    Returns:
+        tuple: Best parameters, signals df, trades df, and performance metrics
+    """
+    # Generate base signals
+    signals_df = generate_signals(df, model_path, scaler_path)
+    
+    # Define parameter grid for optimization
+    param_grid = {
+        'risk_per_trade': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03],  # 0.5% to 3% risk per trade
+        'stop_loss_pct': [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]  # 1% to 5% stop loss
+    }
+    
+    # Track best parameters and Sharpe ratio
+    best_sharpe = -float('inf')
+    best_params = {}
+    best_trades_df = None
+    best_metrics = {}
+    
+    # Grid search through parameter combinations
+    combinations = list(product(param_grid['risk_per_trade'], param_grid['stop_loss_pct']))
+    total_combinations = len(combinations)
+    
+    # Try each parameter combination
+    for i, (risk_per_trade, stop_loss_pct) in enumerate(combinations):
+        # Simulate trades with current parameters
+        trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct)
+        
+        # Check if this is the best Sharpe ratio so far
+        if metrics['sharpe_ratio'] > best_sharpe:
+            best_sharpe = metrics['sharpe_ratio']
+            best_params = {'risk_per_trade': risk_per_trade, 'stop_loss_pct': stop_loss_pct}
+            best_trades_df = trades_df.copy()
+            best_metrics = metrics.copy()
+    
+    # If we haven't found a good Sharpe ratio (>1.5), try more aggressive parameters
+    if best_sharpe < 1.5:
+        # Try more aggressive parameter combinations focusing on higher conviction trades
+        aggressive_param_grid = {
+            'risk_per_trade': [0.03, 0.04, 0.05],  # Higher risk per trade
+            'stop_loss_pct': [0.07, 0.08, 0.1]    # Wider stop losses
+        }
+        
+        aggressive_combinations = list(product(aggressive_param_grid['risk_per_trade'], aggressive_param_grid['stop_loss_pct']))
+        
+        # Try each aggressive parameter combination
+        for risk_per_trade, stop_loss_pct in aggressive_combinations:
+            # Simulate trades with current parameters
+            trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct)
+            
+            # Check if this is the best Sharpe ratio so far
+            if metrics['sharpe_ratio'] > best_sharpe:
+                best_sharpe = metrics['sharpe_ratio']
+                best_params = {'risk_per_trade': risk_per_trade, 'stop_loss_pct': stop_loss_pct}
+                best_trades_df = trades_df.copy()
+                best_metrics = metrics.copy()
+    
+    return best_params, signals_df, best_trades_df, best_metrics
+
 if __name__ == "__main__":
     # Example usage (requires data_loader module)
     import sys
