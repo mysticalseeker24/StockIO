@@ -11,8 +11,9 @@ Develop a trading strategy using historical price data to maximize alpha. The st
 - **Technical Analysis**: Implements indicators like Moving Averages, RSI, and Bollinger Bands using pandas/numpy (no Ta-Lib dependency)
 - **Hybrid Strategy**: Combines trend-following, mean-reversion, and machine learning signals for better performance
 - **Risk Management**: Includes volatility-based position sizing and stop-loss implementation
-- **Parameter Optimization**: Uses grid search to maximize Sharpe Ratio
-- **Interactive UI**: Streamlit-based frontend for testing strategies on uploaded datasets
+- **Parameter Optimization**: Uses grid search to maximize Sharpe Ratio, targeting values above 1.5 and aiming for 3.0
+- **Multi-File Comparison**: Supports analysis of multiple stocks simultaneously via individual files or ZIP archives
+- **Interactive UI**: Streamlit-based frontend with comparative analysis dashboards
 - **Performance Metrics**: Calculates total return, annualized return, Sharpe ratio, max drawdown, and win rate
 
 ## Project Structure
@@ -44,11 +45,16 @@ streamlit run src/app.py
 ## Using the Application
 
 1. **Start the Streamlit App**: Run `streamlit run src/app.py`
-2. **Upload Data**: Use the file uploader in the sidebar to upload CSV files with OHLCV data
+2. **Upload Data**: Choose from three upload options:
+   - Single CSV file
+   - Multiple CSV files at once
+   - ZIP archive containing multiple CSV files
 3. **Adjust Risk Parameters**:
    - Risk per trade: Controls position sizing (default: 1%)
    - Stop-loss percentage: Sets maximum loss per trade (default: 2%)
-4. **View Results**: Explore performance metrics, portfolio value chart, and trading signals
+   - Enable automatic parameter optimization to maximize Sharpe ratio
+4. **Compare Results**: View side-by-side comparison of multiple stocks
+5. **Analyze Details**: Select individual stocks for in-depth performance analysis
 
 ## Implementation Details
 
