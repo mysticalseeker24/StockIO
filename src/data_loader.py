@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import os
-import talib
 
 def load_and_process_data(data_dir='../data'):
     """
@@ -38,15 +37,21 @@ def load_and_process_data(data_dir='../data'):
         # Calculate returns
         df['returns'] = (df['Close'] - df['Close'].shift(1)) / df['Close'].shift(1)
         
-        # Calculate SMA indicators
-        df['SMA50'] = talib.SMA(df['Close'].values, timeperiod=50)
-        df['SMA200'] = talib.SMA(df['Close'].values, timeperiod=200)
+        # Calculate SMA indicators using pandas rolling mean
+        df['SMA50'] = df['Close'].rolling(window=50).mean()
+        df['SMA200'] = df['Close'].rolling(window=200).mean()
         
         # Calculate trend strength
         df['trend_strength'] = (df['SMA50'] - df['SMA200']) / df['SMA200']
         
-        # Calculate RSI
-        df['RSI'] = talib.RSI(df['Close'].values, timeperiod=14)
+        # Calculate RSI using pandas (14-day period)
+        delta = df['Close'].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss
+        df['RSI'] = 100 - (100 / (1 + rs))
         
         # Calculate volatility
         df['volatility'] = df['returns'].rolling(window=20).std()
@@ -55,8 +60,10 @@ def load_and_process_data(data_dir='../data'):
         df['momentum'] = df['returns'].rolling(window=10).sum()
         
         # Calculate Bollinger Bands
-        df['BB_upper'], df['BB_middle'], df['BB_lower'] = talib.BBANDS(
-            df['Close'].values, timeperiod=20, nbdevup=2, nbdevdn=2)
+        df['BB_middle'] = df['Close'].rolling(window=20).mean()
+        std = df['Close'].rolling(window=20).std()
+        df['BB_upper'] = df['BB_middle'] + (std * 2)
+        df['BB_lower'] = df['BB_middle'] - (std * 2)
         
         # Drop rows with NaN values
         df.dropna(inplace=True)
