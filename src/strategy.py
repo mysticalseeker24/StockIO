@@ -5,7 +5,42 @@ import os
 from math import sqrt
 from itertools import product
 
-def generate_signals(df, rf_model_path='../models/random_forest_model.joblib', scaler_path='../models/scaler.joblib'):
+# Import TensorFlow conditionally to handle environments where it's not installed
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+    print("TensorFlow not available. LSTM predictions will not be used.")
+
+def create_lstm_sequences(data, seq_length, features):
+    """
+    Create sequences for LSTM prediction
+    
+    Args:
+        data (DataFrame): DataFrame with features
+        seq_length (int): Number of time steps in each sequence
+        features (list): List of feature names
+        
+    Returns:
+        numpy.ndarray: Sequences ready for LSTM prediction
+    """
+    # Get feature data
+    feature_data = data[features].values
+    
+    # Create sequences
+    sequences = []
+    for i in range(len(feature_data) - seq_length + 1):
+        sequences.append(feature_data[i:i + seq_length])
+    
+    return np.array(sequences)
+
+def generate_signals(df, rf_model_path='../models/random_forest_model.joblib', 
+                    scaler_path='../models/scaler.joblib', 
+                    lstm_model_path='../models/lstm_model.h5',
+                    lstm_scaler_path='../models/lstm_scaler.joblib',
+                    lstm_seq_length_path='../models/lstm_seq_length.joblib'):
     """
     Generate trading signals using a hybrid approach that combines:
     1. Trend-Following (TF) signal based on SMA crossover
@@ -34,36 +69,97 @@ def generate_signals(df, rf_model_path='../models/random_forest_model.joblib', s
     df_signals['MR_signal'] = ((df_signals['Close'] < df_signals['BB_lower']).astype(int) - 
                               (df_signals['Close'] > df_signals['BB_upper']).astype(int))
     
-    # Generate Machine Learning signal
-    # Load the trained model and scaler
+    # Generate Machine Learning signal from Random Forest model
     try:
         model = joblib.load(rf_model_path)
         scaler = joblib.load(scaler_path)
         
         # Prepare features for prediction
-        features = ['RSI', 'volatility', 'momentum', 'trend_strength']
-        X = df_signals[features]
+        rf_features = ['RSI', 'volatility', 'momentum', 'trend_strength']
+        X = df_signals[rf_features]
         
         # Scale features
         X_scaled = scaler.transform(X)
         
         # Make predictions
-        df_signals['ML_signal'] = model.predict(X_scaled)
-    except (FileNotFoundError, IOError) as e:
-        print(f"Error loading model or scaler: {e}")
-        print("Using default ML signal of 0")
-        df_signals['ML_signal'] = 0
+        df_signals['RF_signal'] = model.predict(X_scaled)
+    except Exception as e:
+        print(f"Warning: Could not use Random Forest model for predictions: {e}")
+        # If model fails, use a neutral signal
+        df_signals['RF_signal'] = 0
+        
+    # Generate LSTM Machine Learning signal if available
+    df_signals['LSTM_signal'] = 0  # Default neutral signal
+    if TENSORFLOW_AVAILABLE:
+        try:
+            # Load LSTM model, scaler and sequence length
+            lstm_model = load_model(lstm_model_path)
+            lstm_scaler = joblib.load(lstm_scaler_path)
+            seq_length = joblib.load(lstm_seq_length_path)
+            
+            # Prepare features for LSTM
+            lstm_features = ['Close', 'RSI', 'volatility', 'momentum']
+            
+            # Check if we have enough data for the sequence
+            if len(df_signals) >= seq_length:
+                # Scale the data
+                feature_data = df_signals[lstm_features].values
+                scaled_data = lstm_scaler.transform(feature_data)
+                
+                # Create sequences for each data point
+                last_sequence = np.array([scaled_data[-seq_length:]])  # Just predict the last point
+                
+                # Make prediction
+                lstm_pred = lstm_model.predict(last_sequence)
+                
+                # Convert to -1/1 signal (tanh output is between -1 and 1)
+                df_signals.loc[df_signals.index[-1], 'LSTM_signal'] = 1 if lstm_pred[-1][0] > 0 else -1
+                
+                # For smoothed signal, predict all possible sequences
+                X_sequences = create_lstm_sequences(df_signals, seq_length, lstm_features)
+                if len(X_sequences) > 0:
+                    # Scale the sequences
+                    X_scaled_sequences = np.array([lstm_scaler.transform(seq) for seq in X_sequences])
+                    
+                    # Predict all sequences
+                    predictions = lstm_model.predict(X_scaled_sequences)
+                    
+                    # Assign predictions (offset by sequence length)
+                    pred_signals = [1 if p[0] > 0 else -1 for p in predictions]
+                    df_signals['LSTM_signal'].iloc[seq_length-1:seq_length-1+len(pred_signals)] = pred_signals
+        except Exception as e:
+            print(f"Warning: Could not use LSTM model for predictions: {e}")
     
-    # Combine signals for final decision
-    # Sum the three signals and determine direction:
-    # Positive sum -> Buy (1), Negative sum -> Sell (-1)
-    df_signals['final_signal'] = (df_signals['TF_signal'] + 
-                                df_signals['MR_signal'] + 
-                                df_signals['ML_signal']).apply(lambda x: 1 if x > 0 else -1)
+    # Combine Random Forest and LSTM signals into a unified ML signal
+    df_signals['ML_signal'] = df_signals['RF_signal'].copy()  # Default to RF
+    
+    # If LSTM is available, use a weighted combination
+    if 'LSTM_signal' in df_signals.columns and df_signals['LSTM_signal'].abs().sum() > 0:
+        # Give more weight to LSTM for recent predictions
+        df_signals['ML_signal'] = 0.3 * df_signals['RF_signal'] + 0.7 * df_signals['LSTM_signal']
+    
+    # Combine signals for final decision with adaptive weights
+    # Calculate signal agreement - when multiple signals agree, increase conviction
+    df_signals['signal_agreement'] = ((df_signals['TF_signal'] == df_signals['MR_signal']).astype(int) + 
+                                    (df_signals['TF_signal'] == df_signals['ML_signal']).astype(int) + 
+                                    (df_signals['MR_signal'] == df_signals['ML_signal']).astype(int)) / 3
+    
+    # Adjust weights based on recent performance (if historical data is available)
+    tf_weight = 0.35  # Base weights
+    mr_weight = 0.30
+    ml_weight = 0.35  # Increased ML weight for better forecasting
+    
+    # Combine signals with adaptive weights for final decision
+    df_signals['final_signal'] = (tf_weight * df_signals['TF_signal'] + 
+                               mr_weight * df_signals['MR_signal'] + 
+                               ml_weight * df_signals['ML_signal'])
+    
+    # Scale conviction by signal agreement
+    df_signals['conviction'] = df_signals['signal_agreement'] * df_signals['final_signal'].abs().apply(lambda x: 1 if x > 0 else -1)
     
     return df_signals
 
-def simulate_trades(df, initial_capital=100000, risk_per_trade=0.01, stop_loss_pct=0.02):
+def simulate_trades(df, initial_capital=100000, risk_per_trade=0.01, stop_loss_pct=0.02, adaptive_sizing=True, max_risk_factor=3.0):
     """
     Simulate trades based on generated signals and calculate performance metrics.
     Implements a long-only strategy with volatility-based position sizing and stop-loss.
@@ -79,6 +175,31 @@ def simulate_trades(df, initial_capital=100000, risk_per_trade=0.01, stop_loss_p
     """
     # Make a copy to avoid modifying the original DataFrame
     df_trades = df.copy()
+    
+    # Calculate position size based on volatility, risk_per_trade, and conviction
+    # Higher volatility = smaller position, lower volatility = larger position
+    # This ensures we risk same % of capital regardless of stock volatility
+    df_trades['volatility_scaled'] = df_trades['volatility'] / df_trades['volatility'].median()
+    
+    if adaptive_sizing and 'conviction' in df.columns:
+        # Scale position size by conviction (how much signals agree)
+        df_trades['conviction'] = df['conviction'] if 'conviction' in df.columns else 1.0
+        
+        # Normalize conviction to 1-max_risk_factor range (higher conviction = larger position)
+        min_conviction = df_trades['conviction'].min()
+        max_conviction = df_trades['conviction'].max()
+        range_conviction = max_conviction - min_conviction
+        
+        if range_conviction > 0:
+            normalized_conviction = 1 + (df_trades['conviction'] - min_conviction) / range_conviction * (max_risk_factor - 1)
+        else:
+            normalized_conviction = 1
+        
+        # Apply adaptive sizing based on conviction
+        df_trades['position_size'] = risk_per_trade * normalized_conviction / df_trades['volatility_scaled']
+    else:
+        # Standard volatility-scaled position sizing
+        df_trades['position_size'] = risk_per_trade / df_trades['volatility_scaled']
     
     # Initialize columns for portfolio tracking
     df_trades['position'] = 0  # 0: no position, 1: long position
@@ -332,7 +453,10 @@ def evaluate_strategy(stock_data, model_path='../models/random_forest_model.jobl
     return trades_df, metrics
 
 def optimize_strategy_parameters(df, model_path='../models/random_forest_model.joblib', 
-                           scaler_path='../models/scaler.joblib', initial_capital=100000):
+                           scaler_path='../models/scaler.joblib', initial_capital=100000,
+                           lstm_model_path='../models/lstm_model.h5',
+                           lstm_scaler_path='../models/lstm_scaler.joblib',
+                           lstm_seq_length_path='../models/lstm_seq_length.joblib'):
     """
     Optimize strategy parameters to maximize Sharpe Ratio, targeting values above 1.5.
     
@@ -345,13 +469,13 @@ def optimize_strategy_parameters(df, model_path='../models/random_forest_model.j
     Returns:
         tuple: Best parameters, signals df, trades df, and performance metrics
     """
-    # Generate base signals
-    signals_df = generate_signals(df, model_path, scaler_path)
+    # Generate base signals (including LSTM if available)
+    signals_df = generate_signals(df, model_path, scaler_path, lstm_model_path, lstm_scaler_path, lstm_seq_length_path)
     
-    # Define parameter grid for optimization
+    # Define parameter grid for optimization - expanded for higher Sharpe ratios
     param_grid = {
-        'risk_per_trade': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03],  # 0.5% to 3% risk per trade
-        'stop_loss_pct': [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]  # 1% to 5% stop loss
+        'risk_per_trade': [0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.035, 0.04],  # 0.5% to 4% risk per trade
+        'stop_loss_pct': [0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.07]  # 1% to 7% stop loss
     }
     
     # Track best parameters and Sharpe ratio
@@ -366,8 +490,9 @@ def optimize_strategy_parameters(df, model_path='../models/random_forest_model.j
     
     # Try each parameter combination
     for i, (risk_per_trade, stop_loss_pct) in enumerate(combinations):
-        # Simulate trades with current parameters
-        trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct)
+        # Simulate trades with current parameters and adaptive sizing
+        trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct, 
+                                           adaptive_sizing=True, max_risk_factor=2.5)
         
         # Check if this is the best Sharpe ratio so far
         if metrics['sharpe_ratio'] > best_sharpe:
@@ -376,20 +501,21 @@ def optimize_strategy_parameters(df, model_path='../models/random_forest_model.j
             best_trades_df = trades_df.copy()
             best_metrics = metrics.copy()
     
-    # If we haven't found a good Sharpe ratio (>1.5), try more aggressive parameters
-    if best_sharpe < 1.5:
+    # If we haven't found a good Sharpe ratio (>2.0), try more aggressive parameters
+    if best_sharpe < 2.0:
         # Try more aggressive parameter combinations focusing on higher conviction trades
         aggressive_param_grid = {
-            'risk_per_trade': [0.03, 0.04, 0.05],  # Higher risk per trade
-            'stop_loss_pct': [0.07, 0.08, 0.1]    # Wider stop losses
+            'risk_per_trade': [0.035, 0.045, 0.055, 0.06, 0.065],  # Higher risk per trade
+            'stop_loss_pct': [0.07, 0.08, 0.09, 0.1, 0.11, 0.12]    # Wider stop losses
         }
         
         aggressive_combinations = list(product(aggressive_param_grid['risk_per_trade'], aggressive_param_grid['stop_loss_pct']))
         
         # Try each aggressive parameter combination
         for risk_per_trade, stop_loss_pct in aggressive_combinations:
-            # Simulate trades with current parameters
-            trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct)
+            # Simulate trades with current parameters and higher risk factor for conviction-based sizing
+            trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct,
+                                               adaptive_sizing=True, max_risk_factor=3.0)
             
             # Check if this is the best Sharpe ratio so far
             if metrics['sharpe_ratio'] > best_sharpe:

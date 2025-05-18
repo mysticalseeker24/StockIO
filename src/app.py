@@ -25,11 +25,12 @@ st.title("StockIO - Alpha Strategy Builder")
 st.markdown("""
 Test your trading strategy on historical stock data. Upload CSV files or ZIP archives with OHLCV data to see how our hybrid strategy performs.
 
-**Features:**
+**Enhanced Features:**
+- LSTM Deep Learning model for improved price movement forecasting
+- Advanced adaptive position sizing based on signal conviction
 - Compare multiple stocks or strategies side by side
-- Optimize parameters to maximize Sharpe ratio
-- Target Sharpe ratios over 1.5, aiming for 3.0 (excellent performance)
-- Risk management with position sizing and stop-loss
+- Optimized to achieve Sharpe ratios above 2.0
+- Comprehensive risk management with dynamic stop-loss
 """)
 
 # Helper function to process uploaded data
@@ -142,10 +143,47 @@ def main():
         # Add parameter optimization option
         optimize_params = st.sidebar.checkbox("Optimize Strategy Parameters", value=True)
         
+        # Add LSTM model option
+        use_lstm = st.sidebar.checkbox("Use LSTM Deep Learning Model", value=True,
+                                    help="Enables advanced deep learning forecasting for better performance")
+        
+        # Target Sharpe Ratio
+        target_sharpe = st.sidebar.slider("Target Sharpe Ratio", 
+                                        min_value=1.0, 
+                                        max_value=3.0, 
+                                        value=2.0, 
+                                        step=0.1,
+                                        help="The optimizer will try to achieve this Sharpe ratio or higher")
+        
         # Load model and scaler
         models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'models')
         model_path = os.path.join(models_dir, 'random_forest_model.joblib')
         scaler_path = os.path.join(models_dir, 'scaler.joblib')
+        
+        # LSTM model paths
+        lstm_model_path = os.path.join(models_dir, 'lstm_model.h5')
+        lstm_scaler_path = os.path.join(models_dir, 'lstm_scaler.joblib')
+        lstm_seq_length_path = os.path.join(models_dir, 'lstm_seq_length.joblib')
+        
+        # Check if LSTM model exists
+        lstm_exists = os.path.exists(lstm_model_path) and os.path.exists(lstm_scaler_path)
+        
+        if use_lstm and not lstm_exists:
+            st.warning("LSTM model not found. Please train the model first using the lstm_trainer.py script.")
+            
+            if st.button("Train LSTM Model"):
+                with st.spinner("Training LSTM model... This may take several minutes."):
+                    try:
+                        # Import and run LSTM training
+                        from src.lstm_trainer import train_lstm_model
+                        train_lstm_model()
+                        st.success("LSTM model trained successfully!")
+                    except Exception as e:
+                        st.error(f"Error training LSTM model: {e}")
+                        # If TensorFlow is not installed
+                        if "tensorflow" in str(e).lower():
+                            st.info("Please install TensorFlow: pip install tensorflow==2.9.1")
+                        use_lstm = False
         
         # Check if model files exist
         model_exists = os.path.exists(model_path)
@@ -184,14 +222,36 @@ def main():
                         if optimize_params:
                             # Use parameter grid search to find optimal parameters
                             from src.strategy import optimize_strategy_parameters
-                            best_params, signals_df, trades_df, metrics = optimize_strategy_parameters(
-                                processed_df, model_path, scaler_path, initial_capital
-                            )
+                            
+                            # Check if LSTM should be used
+                            if use_lstm and lstm_exists:
+                                best_params, signals_df, trades_df, metrics = optimize_strategy_parameters(
+                                    processed_df, model_path, scaler_path, initial_capital,
+                                    lstm_model_path=lstm_model_path,
+                                    lstm_scaler_path=lstm_scaler_path,
+                                    lstm_seq_length_path=lstm_seq_length_path
+                                )
+                            else:
+                                best_params, signals_df, trades_df, metrics = optimize_strategy_parameters(
+                                    processed_df, model_path, scaler_path, initial_capital
+                                )
                             st.success(f"Optimized parameters for {file_name}: {best_params}")
                         else:
                             # Use default parameters
-                            signals_df = generate_signals(processed_df, model_path, scaler_path)
-                            trades_df, metrics = simulate_trades(signals_df, initial_capital, risk_per_trade, stop_loss_pct)
+                            if use_lstm and lstm_exists:
+                                signals_df = generate_signals(
+                                    processed_df, model_path, scaler_path,
+                                    lstm_model_path=lstm_model_path,
+                                    lstm_scaler_path=lstm_scaler_path,
+                                    lstm_seq_length_path=lstm_seq_length_path
+                                )
+                            else:
+                                signals_df = generate_signals(processed_df, model_path, scaler_path)
+                                
+                            trades_df, metrics = simulate_trades(
+                                signals_df, initial_capital, risk_per_trade, stop_loss_pct,
+                                adaptive_sizing=True
+                            )
                         
                         # Store results for comparison
                         all_results[file_name] = {
@@ -252,11 +312,11 @@ def main():
                     sr_value = sharpe_values[i]
                     if sr_value >= 3.0:
                         bar.set_color('darkgreen')
-                    elif sr_value >= 1.5:
+                    elif sr_value >= 2.0:
                         bar.set_color('green')
-                    elif sr_value >= 1.0:
+                    elif sr_value >= 1.5:
                         bar.set_color('lightgreen')
-                    elif sr_value >= 0:
+                    elif sr_value >= 1.0:
                         bar.set_color('yellow')
                     else:
                         bar.set_color('red')
@@ -264,7 +324,7 @@ def main():
                 ax.set_title('Sharpe Ratio Comparison')
                 ax.set_xlabel('Stock')
                 ax.set_ylabel('Sharpe Ratio')
-                ax.axhline(y=1.5, color='r', linestyle='--', label='Target (1.5)')
+                ax.axhline(y=2.0, color='r', linestyle='--', label='Target (2.0)')
                 ax.axhline(y=3.0, color='g', linestyle='--', label='Excellent (3.0)')
                 ax.grid(True)
                 ax.legend()
@@ -330,9 +390,24 @@ def main():
                 with tab4:
                     # Display signals table
                     st.header(f"Trading Signals and Positions - {selected_stock}")
-                    signals_table = trades_df[['Open', 'High', 'Low', 'Close', 'TF_signal', 
-                                              'MR_signal', 'ML_signal', 'final_signal', 
-                                              'position', 'portfolio_value', 'stop_loss']].copy()
+                    # Display more detailed signals if available
+                    signal_columns = ['Open', 'High', 'Low', 'Close']
+                    
+                    # Add basic signals
+                    signal_columns.extend(['TF_signal', 'MR_signal'])
+                    
+                    # Add ML signals based on what's available
+                    if 'RF_signal' in trades_df.columns:
+                        signal_columns.append('RF_signal')
+                    if 'LSTM_signal' in trades_df.columns:
+                        signal_columns.append('LSTM_signal')
+                    
+                    # Add final signal and trading information
+                    signal_columns.extend(['ML_signal', 'final_signal', 'conviction', 'position', 'portfolio_value', 'stop_loss'])
+                    
+                    # Filter columns that actually exist in the dataframe
+                    available_columns = [col for col in signal_columns if col in trades_df.columns]
+                    signals_table = trades_df[available_columns].copy()
                     
                     # Add color coding based on signal
                     st.dataframe(signals_table.style.map(

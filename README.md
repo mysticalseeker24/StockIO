@@ -8,12 +8,14 @@ Develop a trading strategy using historical price data to maximize alpha. The st
 
 ## Features
 
+- **LSTM Deep Learning**: Incorporates a Long Short-Term Memory neural network for advanced price movement forecasting
+- **Adaptive Position Sizing**: Dynamically adjusts position sizes based on signal conviction and agreement
 - **Technical Analysis**: Implements indicators like Moving Averages, RSI, and Bollinger Bands using pandas/numpy (no Ta-Lib dependency)
 - **Hybrid Strategy**: Combines trend-following, mean-reversion, and machine learning signals for better performance
-- **Risk Management**: Includes volatility-based position sizing and stop-loss implementation
-- **Parameter Optimization**: Uses grid search to maximize Sharpe Ratio, targeting values above 1.5 and aiming for 3.0
+- **Enhanced Risk Management**: Includes volatility-based position sizing with adaptive scaling and optimized stop-loss implementation
+- **Parameter Optimization**: Sophisticated grid search targeting Sharpe Ratios above 2.0, with extended parameter ranges
 - **Multi-File Comparison**: Supports analysis of multiple stocks simultaneously via individual files or ZIP archives
-- **Interactive UI**: Streamlit-based frontend with comparative analysis dashboards
+- **Interactive UI**: Streamlit-based frontend with comparative analysis dashboards and enhanced visualization
 - **Performance Metrics**: Calculates total return, annualized return, Sharpe ratio, max drawdown, and win rate
 
 ## Project Structure
@@ -67,19 +69,36 @@ The `data_loader.py` module implements the following technical indicators withou
 - **Bollinger Bands**: Using rolling mean and standard deviation
 - **Additional Features**: Trend strength, volatility, and momentum indicators
 
-### Trading Strategy
+### Advanced Machine Learning Models
 
-The hybrid strategy combines three signal generators:
+The system uses two complementary machine learning approaches:
+
+1. **Random Forest Model** (`model_trainer.py`):
+   - Trained on technical indicators to classify price movements
+   - Uses sklearn's RandomForestClassifier with optimized parameters
+   - Feature importance analysis to identify key predictors
+
+2. **LSTM Neural Network** (`lstm_trainer.py`):
+   - 60-day sequence input for temporal pattern recognition
+   - Two LSTM layers (50 units each) for deep pattern recognition
+   - Advanced time-series forecasting of price movements
+   - Trained on multiple stocks for robust generalization
+
+### Enhanced Hybrid Strategy
+
+The hybrid strategy now combines four signal generators:
 
 1. **Trend-Following**: Based on SMA50 vs SMA200 crossovers
 2. **Mean-Reversion**: Uses Bollinger Bands for oversold/overbought conditions
-3. **Machine Learning**: RandomForest model trained on technical indicators
+3. **Random Forest**: Machine learning classification based on technical indicators
+4. **LSTM Deep Learning**: Sequence-based neural network predictions
 
-Risk management includes:
+Advanced risk management includes:
 
-- Volatility-based position sizing (% risk per trade)
-- Stop-loss implementation (exit if loss exceeds threshold)
-- Parameter optimization to maximize Sharpe Ratio
+- Adaptive position sizing based on signal conviction
+- Dynamic volatility-scaled risk adjustment
+- Optimized stop-loss parameters targeting Sharpe Ratios > 2.0
+- Signal agreement analysis to boost conviction on high-probability trades
 
 ## License
 
